@@ -2,8 +2,9 @@
 
 A deliberately small but *complete* machine-learning pipeline: synthetic data
 generation, feature standardization, train/test split, model fitting
-(LogisticRegression), and evaluation. The point is the shape of a real pipeline
-— not the model — so it's easy to extend with your own data and learner.
+(LogisticRegression + RandomForestClassifier), and evaluation. The point is the shape
+of a real pipeline — not the models — so it's easy to extend with your own
+data and learner.
 
 ## Install
 
@@ -15,7 +16,8 @@ pip install -e .
 
 ```bash
 python -m pipeline.train
-# -> {"train_acc": 0.9x, "test_acc": 0.9x}
+# -> {"train_acc": 1.0, "test_acc": 1.0,
+#     "random_forest_train_acc": 1.0, "random_forest_test_acc": 1.0}
 ```
 
 ## Structure

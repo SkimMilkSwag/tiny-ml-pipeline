@@ -27,18 +27,31 @@ def accuracy(y_true, y_pred):
 
 
 def run():
-    """End-to-end: make data -> standardize -> train LogisticRegression -> evaluate."""
+    """End-to-end: make data -> standardize -> train LR + RF -> evaluate.
+
+    Returns a dict with train/test accuracy for both LogisticRegression and
+    RandomForestClassifier so the two baselines can be compared directly.
+    """
     from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import RandomForestClassifier
     from pipeline.features import standardize
 
     X, y = make_synthetic()
     Xtr, Xte, ytr, yte = split(X, y)
     Xtr, mean, std = standardize(Xtr)
     Xte = (Xte - mean) / std
-    clf = LogisticRegression(max_iter=1000).fit(Xtr, ytr)
-    tr_acc = accuracy(ytr, clf.predict(Xtr))
-    te_acc = accuracy(yte, clf.predict(Xte))
-    return {"train_acc": round(tr_acc, 4), "test_acc": round(te_acc, 4)}
+
+    results: dict[str, float] = {}
+
+    clf_lr = LogisticRegression(max_iter=1000).fit(Xtr, ytr)
+    results["train_acc"] = round(accuracy(ytr, clf_lr.predict(Xtr)), 4)
+    results["test_acc"] = round(accuracy(yte, clf_lr.predict(Xte)), 4)
+
+    clf_rf = RandomForestClassifier(n_estimators=100, random_state=7).fit(Xtr, ytr)
+    results["random_forest_train_acc"] = round(accuracy(ytr, clf_rf.predict(Xtr)), 4)
+    results["random_forest_test_acc"] = round(accuracy(yte, clf_rf.predict(Xte)), 4)
+
+    return results
 
 
 if __name__ == "__main__":
