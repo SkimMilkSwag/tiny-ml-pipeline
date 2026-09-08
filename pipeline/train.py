@@ -26,6 +26,22 @@ def accuracy(y_true, y_pred):
     return float((y_true == y_pred).mean())
 
 
+def feature_importances(clf, feature_names=("x0", "x1")):
+    """Return a feature -> importance mapping for a tree-based classifier.
+
+    Reads ``clf.feature_importances_`` (RandomForest and friends) and pairs it
+    with ``feature_names``, returning the dict sorted by importance descending.
+    Raises if the model exposes no importances, so callers can tell apart a
+    linear baseline (which has none) from a tree ensemble.
+    """
+    if not hasattr(clf, "feature_importances_"):
+        raise AttributeError(f"{type(clf).__name__} exposes no feature_importances_")
+    imps = clf.feature_importances_
+    return dict(
+        sorted(zip(feature_names, imps), key=lambda kv: kv[1], reverse=True)
+    )
+
+
 def run():
     """End-to-end: make data -> standardize -> train LR + RF -> evaluate.
 
@@ -50,6 +66,13 @@ def run():
     clf_rf = RandomForestClassifier(n_estimators=100, random_state=7).fit(Xtr, ytr)
     results["random_forest_train_acc"] = round(accuracy(ytr, clf_rf.predict(Xtr)), 4)
     results["random_forest_test_acc"] = round(accuracy(yte, clf_rf.predict(Xte)), 4)
+
+    # The tree ensemble is where feature importances live; the linear baseline
+    # has no such attribute. Round to 4 dp so the JSON output stays tidy.
+    rf_imps = feature_importances(clf_rf)
+    results["random_forest_feature_importances"] = {
+        name: round(float(imp), 4) for name, imp in rf_imps.items()
+    }
 
     return results
 
