@@ -1,6 +1,9 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from pipeline.train import make_synthetic, split, run, accuracy, feature_importances
+from pipeline.train import (
+    make_synthetic, split, run, accuracy, feature_importances,
+    confusion_matrix, print_confusion_matrix,
+)
 from pipeline.load import load_csv
 
 
@@ -199,3 +202,60 @@ def test_run_with_csv_data(tmp_path):
     result = run(data=str(p))
     assert result["test_acc"] > 0.85
     assert set(result["random_forest_feature_importances"].keys()) == {"x", "y"}
+
+
+def test_confusion_matrix_counts_by_true_and_pred():
+    y_true = [0, 0, 1, 1, 1]
+    y_pred = [0, 1, 1, 1, 0]
+    cm = confusion_matrix(y_true, y_pred)
+    # cm[true][pred]: one (0->1) and one (1->0) error, three correct.
+    assert cm == [[1, 1], [1, 2]]
+
+
+def test_confusion_matrix_all_correct_is_diagonal():
+    y = [0, 0, 1, 1]
+    cm = confusion_matrix(y, y)
+    assert cm == [[2, 0], [0, 2]]
+
+
+def test_confusion_matrix_handles_missing_class():
+    # a model that predicts only class 1 must still get a class-0 row/column
+    y_true = [0, 1]
+    y_pred = [1, 1]
+    cm = confusion_matrix(y_true, y_pred)
+    assert cm == [[0, 1], [0, 1]]
+    assert len(cm) == 2 and all(len(r) == 2 for r in cm)
+
+
+def test_confusion_matrix_row_sums_match_true_class_counts():
+    import random
+
+    rng = random.Random(3)
+    y_true = [rng.randint(0, 1) for _ in range(40)]
+    y_pred = [rng.randint(0, 1) for _ in range(40)]
+    cm = confusion_matrix(y_true, y_pred)
+    assert sum(cm[0]) == y_true.count(0)
+    assert sum(cm[1]) == y_true.count(1)
+
+
+def test_print_confusion_matrix_layout():
+    cm = [[10, 2], [3, 25]]
+    out = print_confusion_matrix(cm)
+    lines = out.splitlines()
+    assert len(lines) == 3  # header + two class rows
+    assert "10" in lines[1] and "25" in lines[2]
+
+
+def test_run_includes_test_confusion_matrix():
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    result = run()
+    cm = result["confusion_matrix"]
+    assert len(cm) == 2 and all(len(r) == 2 for r in cm)
+    # every test sample lands somewhere in the matrix, so its total must
+    # equal the test split size.
+    n_test = sum(sum(r) for r in cm)
+    X, y = make_synthetic()
+    _, Xte, _, yte = split(X, y)
+    assert n_test == len(yte)

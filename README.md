@@ -16,9 +16,8 @@ pip install -e .
 
 ```bash
 python -m pipeline.train
-# -> {"train_acc": 1.0, "test_acc": 1.0,
-#     "random_forest_train_acc": 1.0, "random_forest_test_acc": 1.0,
-#     "random_forest_feature_importances": {"x0": ..., "x1": ...}}
+# stderr: the test-split confusion matrix for the logistic-regression baseline
+# stdout: {"train_acc": 1.0, "test_acc": 1.0, ..., "confusion_matrix": [[a, b], [c, d]]}
 
 # train on your own data instead of the synthetic blobs:
 python -m pipeline.train --data path/to/data.csv

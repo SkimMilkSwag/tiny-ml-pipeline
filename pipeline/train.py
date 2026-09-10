@@ -26,6 +26,38 @@ def accuracy(y_true, y_pred):
     return float((y_true == y_pred).mean())
 
 
+def confusion_matrix(y_true, y_pred, labels=(0, 1)):
+    """Build a confusion matrix as a nested list indexed [true][pred].
+
+    ``result[t][p]`` counts samples whose true label is ``t`` predicted as
+    ``p``. ``labels`` controls which classes are reported (default: binary
+    0/1); any class missing from the predictions still gets its row/column so
+    the matrix shape is stable and a perfect model reads as pure diagonal.
+    Returns a plain list-of-lists so callers can print or JSON-serialize it
+    without pulling in numpy at the call site.
+    """
+    label_set = list(labels)
+
+    def _idx(v):
+        return label_set.index(int(v))
+
+    n = len(label_set)
+    matrix = [[0] * n for _ in range(n)]
+    for t, p in zip(y_true, y_pred):
+        matrix[_idx(t)][_idx(p)] += 1
+    return matrix
+
+
+def print_confusion_matrix(cm, labels=(0, 1)):
+    """Render a confusion matrix as a readable table with row/col headers."""
+    header = "true\\pred".ljust(12) + "".join(str(l).rjust(6) for l in labels)
+    lines = [header]
+    for i, t in enumerate(labels):
+        row = f"  {t}".ljust(12) + "".join(str(v).rjust(6) for v in cm[i])
+        lines.append(row)
+    return "\n".join(lines)
+
+
 def feature_importances(clf, feature_names=("x0", "x1")):
     """Return a feature -> importance mapping for a tree-based classifier.
 
@@ -82,12 +114,17 @@ def run(data=None):
         name: round(float(imp), 4) for name, imp in rf_imps.items()
     }
 
+    # Confusion matrix on the test split for the logistic-regression baseline.
+    cm = confusion_matrix(yte, clf_lr.predict(Xte))
+    results["confusion_matrix"] = cm
+
     return results
 
 
 if __name__ == "__main__":
     import argparse
     import json
+    import sys
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -97,4 +134,6 @@ if __name__ == "__main__":
         "(default: synthetic data)",
     )
     args = parser.parse_args()
-    print(json.dumps(run(data=args.data), indent=2))
+    results = run(data=args.data)
+    print(print_confusion_matrix(results["confusion_matrix"]), file=sys.stderr)
+    print(json.dumps(results, indent=2))
