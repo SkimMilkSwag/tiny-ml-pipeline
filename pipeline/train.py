@@ -42,9 +42,11 @@ def feature_importances(clf, feature_names=("x0", "x1")):
     )
 
 
-def run():
-    """End-to-end: make data -> standardize -> train LR + RF -> evaluate.
+def run(data=None):
+    """End-to-end: load data -> standardize -> train LR + RF -> evaluate.
 
+    With ``data`` (a CSV path) the features and label come from that file;
+    otherwise a synthetic two-Gaussian-blob dataset is generated on the fly.
     Returns a dict with train/test accuracy for both LogisticRegression and
     RandomForestClassifier so the two baselines can be compared directly.
     """
@@ -52,7 +54,13 @@ def run():
     from sklearn.ensemble import RandomForestClassifier
     from pipeline.features import standardize
 
-    X, y = make_synthetic()
+    if data:
+        from pipeline.load import load_csv
+
+        X, y, feature_names = load_csv(data)
+    else:
+        X, y = make_synthetic()
+        feature_names = ("x0", "x1")
     Xtr, Xte, ytr, yte = split(X, y)
     Xtr, mean, std = standardize(Xtr)
     Xte = (Xte - mean) / std
@@ -69,7 +77,7 @@ def run():
 
     # The tree ensemble is where feature importances live; the linear baseline
     # has no such attribute. Round to 4 dp so the JSON output stays tidy.
-    rf_imps = feature_importances(clf_rf)
+    rf_imps = feature_importances(clf_rf, feature_names)
     results["random_forest_feature_importances"] = {
         name: round(float(imp), 4) for name, imp in rf_imps.items()
     }
@@ -78,5 +86,15 @@ def run():
 
 
 if __name__ == "__main__":
+    import argparse
     import json
-    print(json.dumps(run(), indent=2))
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--data",
+        default=None,
+        help="path to a CSV with numeric features and a 0/1 'label' column "
+        "(default: synthetic data)",
+    )
+    args = parser.parse_args()
+    print(json.dumps(run(data=args.data), indent=2))

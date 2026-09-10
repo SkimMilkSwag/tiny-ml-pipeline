@@ -1,6 +1,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from pipeline.train import make_synthetic, split, run, accuracy, feature_importances
+from pipeline.load import load_csv
 
 
 def _sklearn_available():
@@ -99,3 +100,102 @@ def test_run_includes_rf_feature_importances():
     # synthetic blobs are two-axis Gaussians; both features carry signal, so
     # each importance should be a real non-trivial fraction of the whole.
     assert abs(sum(imps.values()) - 1.0) < 1e-3
+
+
+def _write_csv(tmp_path, rows):
+    import csv
+
+    p = tmp_path / "data.csv"
+    with p.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(rows[0])
+        w.writerows(rows[1:])
+    return p
+
+
+def test_load_csv_shapes_and_labels(tmp_path):
+    p = _write_csv(
+        tmp_path,
+        [
+            ["x", "y", "label"],
+            ["0.5", "2.0", "0"],
+            ["1.5", "3.5", "1"],
+            ["2.5", "4.0", "1"],
+        ],
+    )
+    X, y, names = load_csv(p)
+    assert X.shape == (3, 2)
+    assert y.tolist() == [0, 1, 1]
+    assert names == ("x", "y")
+
+
+def test_load_csv_keeps_column_order(tmp_path):
+    p = _write_csv(
+        tmp_path,
+        [
+            ["b", "label", "a"],
+            ["1.0", "1", "2.0"],
+            ["3.0", "0", "4.0"],
+        ],
+    )
+    X, y, names = load_csv(p)
+    # feature_names must mirror the CSV column order (minus the target)
+    assert names == ("b", "a")
+    assert X.tolist() == [[1.0, 2.0], [3.0, 4.0]]
+
+
+def test_load_csv_blank_cells_become_nan(tmp_path):
+    p = _write_csv(
+        tmp_path,
+        [
+            ["x", "label"],
+            ["1.0", "0"],
+            ["", "1"],
+        ],
+    )
+    import numpy as np
+
+    X, y, names = load_csv(p)
+    assert np.isnan(X[1][0])
+    assert X[0][0] == 1.0
+
+
+def test_load_csv_rejects_missing_target(tmp_path):
+    p = _write_csv(
+        tmp_path,
+        [
+            ["x", "y"],
+            ["1.0", "2.0"],
+        ],
+    )
+    import pytest
+
+    with pytest.raises(ValueError):
+        load_csv(p, target="label")
+
+
+def test_load_csv_rejects_empty_file(tmp_path):
+    import pytest
+
+    p = tmp_path / "empty.csv"
+    p.write_text("")
+    with pytest.raises(ValueError):
+        load_csv(p)
+
+
+def test_run_with_csv_data(tmp_path):
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    # two well-separated blobs as a CSV: run() must train on it end-to-end
+    # and the feature names in the importance report must be the CSV's.
+    p = _write_csv(
+        tmp_path,
+        [
+            ["x", "y", "label"],
+            *[["0.1", "0.2", "0"]] * 25 + [["3.9", "4.1", "1"]] * 25,
+        ],
+    )
+    result = run(data=str(p))
+    assert result["test_acc"] > 0.85
+    assert set(result["random_forest_feature_importances"].keys()) == {"x", "y"}

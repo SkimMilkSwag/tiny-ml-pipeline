@@ -17,13 +17,22 @@ pip install -e .
 ```bash
 python -m pipeline.train
 # -> {"train_acc": 1.0, "test_acc": 1.0,
-#     "random_forest_train_acc": 1.0, "random_forest_test_acc": 1.0}
+#     "random_forest_train_acc": 1.0, "random_forest_test_acc": 1.0,
+#     "random_forest_feature_importances": {"x0": ..., "x1": ...}}
+
+# train on your own data instead of the synthetic blobs:
+python -m pipeline.train --data path/to/data.csv
 ```
+
+`--data` expects a CSV with numeric feature columns plus a `label` column of
+`0`/`1` values. The feature names flow through into the importance report, so
+you get a ranked list for your own dataset.
 
 ## Structure
 
 - `pipeline/features.py` — standardization + one-hot helpers
-- `pipeline/train.py` — data generation, splitting, fit/evaluate, and the `run()` entry point
+- `pipeline/load.py` — CSV loader (`load_csv`) for real datasets
+- `pipeline/train.py` — data generation, splitting, fit/evaluate, and the `run()` entry point (accepts `--data path/to.csv`)
 
 ## Extending it
 
