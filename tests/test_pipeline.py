@@ -204,6 +204,41 @@ def test_run_with_csv_data(tmp_path):
     assert set(result["random_forest_feature_importances"].keys()) == {"x", "y"}
 
 
+def test_run_includes_logreg_hyperparam_search():
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    result = run()
+    search = result["logreg_hyperparam_search"]
+    # every grid member was evaluated and reported
+    assert search["C_grid"] == [0.1, 1.0, 10.0]
+    assert set(search["test_acc_by_C"].keys()) == {"0.1", "1.0", "10.0"}
+    # the best is a member of the grid and its accuracy matches its entry
+    assert search["best_C"] in (0.1, 1.0, 10.0)
+    assert search["best_test_acc"] == max(search["test_acc_by_C"].values())
+    assert search["test_acc_by_C"][str(search["best_C"])] == search["best_test_acc"]
+    # the final LR model is trained with the winning C
+    assert result["test_acc"] == search["best_test_acc"]
+
+
+def test_run_hyperparam_search_with_csv_data(tmp_path):
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    # the sweep must also work end-to-end on real CSV data, not just synthetic
+    p = _write_csv(
+        tmp_path,
+        [
+            ["x", "y", "label"],
+            *[["0.1", "0.2", "0"]] * 25 + [["3.9", "4.1", "1"]] * 25,
+        ],
+    )
+    result = run(data=str(p))
+    search = result["logreg_hyperparam_search"]
+    assert set(search["test_acc_by_C"].keys()) == {"0.1", "1.0", "10.0"}
+    assert result["test_acc"] == search["best_test_acc"]
+
+
 def test_confusion_matrix_counts_by_true_and_pred():
     y_true = [0, 0, 1, 1, 1]
     y_pred = [0, 1, 1, 1, 0]
