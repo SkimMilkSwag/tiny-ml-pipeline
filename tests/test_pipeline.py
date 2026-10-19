@@ -251,9 +251,9 @@ def test_run_hgb_with_csv_data(tmp_path):
         ],
     )
     result = run(data=str(p))
-    # 50 rows is tiny for a boosting ensemble; it just needs to learn the
-    # separation, not saturate. The synthetic-dataset test above asserts >0.85.
-    assert result["hist_gradient_boosting_test_acc"] > 0.4
+    # 50 rows is tiny for a boosting ensemble; it just needs to clearly beat
+    # chance (50/50), not saturate. The synthetic-dataset test asserts >0.85.
+    assert result["hist_gradient_boosting_test_acc"] >= 0.6
 
 
 def test_run_hyperparam_search_with_csv_data(tmp_path):
