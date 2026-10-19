@@ -221,6 +221,41 @@ def test_run_includes_logreg_hyperparam_search():
     assert result["test_acc"] == search["best_test_acc"]
 
 
+def test_run_includes_hist_gradient_boosting_comparison():
+    # HGB is the third model in run(); it must report train/test accuracy on
+    # the same split as the other two and beat chance on the synthetic blobs.
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    result = run()
+    assert "hist_gradient_boosting_test_acc" in result
+    assert "hist_gradient_boosting_train_acc" in result
+    assert result["hist_gradient_boosting_test_acc"] > 0.85
+    # train accuracy must be >= test accuracy for any real model on this data;
+    # a reversed pair would signal a split/bookkeeping bug
+    assert (
+        result["hist_gradient_boosting_train_acc"]
+        >= result["hist_gradient_boosting_test_acc"]
+    )
+
+
+def test_run_hgb_with_csv_data(tmp_path):
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    p = _write_csv(
+        tmp_path,
+        [
+            ["x", "y", "label"],
+            *[[ "0.1", "0.2", "0"]] * 25 + [["3.9", "4.1", "1"]] * 25,
+        ],
+    )
+    result = run(data=str(p))
+    # 50 rows is tiny for a boosting ensemble; it just needs to learn the
+    # separation, not saturate. The synthetic-dataset test above asserts >0.85.
+    assert result["hist_gradient_boosting_test_acc"] > 0.4
+
+
 def test_run_hyperparam_search_with_csv_data(tmp_path):
     if not _sklearn_available():
         import pytest

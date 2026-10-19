@@ -75,13 +75,14 @@ def feature_importances(clf, feature_names=("x0", "x1")):
 
 
 def run(data=None):
-    """End-to-end: load data -> standardize -> train LR (grid-searched) + RF.
+    """End-to-end: load data -> standardize -> train LR (grid-searched), RF, HGB.
 
     With ``data`` (a CSV path) the features and label come from that file;
     otherwise a synthetic two-Gaussian-blob dataset is generated on the fly.
     LogisticRegression's regularization strength C is grid-searched over
     [0.1, 1, 10] and the best value by test accuracy is reported alongside
-    train/test accuracy for both baselines so they can be compared directly.
+    train/test accuracy for all three models (LR baseline, RandomForest, and
+    HistGradientBoosting) so they can be compared directly on the same split.
     """
     from sklearn.linear_model import LogisticRegression
     from sklearn.ensemble import RandomForestClassifier
@@ -137,6 +138,22 @@ def run(data=None):
     results["random_forest_feature_importances"] = {
         name: round(float(imp), 4) for name, imp in rf_imps.items()
     }
+
+    # Gradient-boosted trees as the third comparison point. HistGradientBoosting
+    # is a histogram-based learner that handles mixed feature scales without
+    # standardization, so it's a fair head-to-head against both baselines on
+    # the same split.
+    from sklearn.ensemble import HistGradientBoostingClassifier
+
+    clf_hgb = HistGradientBoostingClassifier(max_iter=200, random_state=7).fit(
+        Xtr, ytr
+    )
+    results["hist_gradient_boosting_train_acc"] = round(
+        accuracy(ytr, clf_hgb.predict(Xtr)), 4
+    )
+    results["hist_gradient_boosting_test_acc"] = round(
+        accuracy(yte, clf_hgb.predict(Xte)), 4
+    )
 
     # Confusion matrix on the test split for the logistic-regression baseline.
     cm = confusion_matrix(yte, clf_lr.predict(Xte))
