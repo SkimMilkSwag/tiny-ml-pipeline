@@ -1,8 +1,16 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from pipeline.train import (
-    make_synthetic, split, run, accuracy, feature_importances,
-    confusion_matrix, print_confusion_matrix,
+    METRICS,
+    f1_score,
+    make_synthetic,
+    roc_auc_score,
+    split,
+    run,
+    accuracy,
+    feature_importances,
+    confusion_matrix,
+    print_confusion_matrix,
 )
 from pipeline.load import load_csv
 
@@ -315,6 +323,120 @@ def test_print_confusion_matrix_layout():
     lines = out.splitlines()
     assert len(lines) == 3  # header + two class rows
     assert "10" in lines[1] and "25" in lines[2]
+
+
+def test_metrics_registry_covers_all_three():
+    assert set(METRICS) == {"accuracy", "f1", "roc_auc"}
+
+
+def test_f1_score_perfect_predictions_is_one():
+    assert f1_score([0, 0, 1, 1], [0, 0, 1, 1]) == 1.0
+
+
+def test_f1_score_mixed_counts_match_formula():
+    # one (0->1) FP and one (1->0) FN: precision = recall = 1/2, F1 = 1/2
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 1, 1, 0]
+    assert f1_score(y_true, y_pred) == 0.5
+
+
+def test_f1_score_two_thirds_case():
+    # one false positive only: precision 2/3, recall 1.0 -> F1 = 4/5
+    y_true = [0, 1, 1]
+    y_pred = [1, 1, 1]
+    assert abs(f1_score(y_true, y_pred) - 4.0 / 5.0) < 1e-9
+
+
+def test_f1_score_all_one_predictions():
+    # no false positives, half the positives found: precision 1, recall 0.5
+    assert abs(f1_score([0, 0, 1, 1], [1, 1, 1, 1]) - 2.0 / 3.0) < 1e-9
+
+
+def test_f1_score_never_predicts_positive_is_zero():
+    # no true positives at all: precision is undefined, F1 convention is 0.0
+    assert f1_score([0, 1], [0, 0]) == 0.0
+
+
+def test_roc_auc_perfect_separation_is_one():
+    assert roc_auc_score([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9]) == 1.0
+
+
+def test_roc_auc_random_scores_near_half():
+    # perfectly overlapping score distributions: every pair is a tie (half credit)
+    assert roc_auc_score([0, 0, 1, 1], [0.5, 0.5, 0.5, 0.5]) == 0.5
+
+
+def test_roc_auc_counts_ties_as_half_credit():
+    # positives [0.5, 0.9], negatives [0.2, 0.5]:
+    # 0.5>0.2 (1), 0.5==0.5 (0.5), 0.9>0.2 (1), 0.9>0.5 (1) => 3.5/4
+    assert roc_auc_score([0, 0, 1, 1], [0.2, 0.5, 0.5, 0.9]) == 0.875
+
+
+def test_roc_auc_rejects_single_class():
+    import pytest
+
+    with pytest.raises(ValueError):
+        roc_auc_score([1, 1], [0.3, 0.7])
+
+
+def test_run_reports_f1_for_all_models():
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    result = run(metric="f1")
+    assert result["metric"] == "f1"
+    # the synthetic blobs are well-separated: every model's F1 should be high
+    for key in (
+        "logreg_train_f1",
+        "logreg_test_f1",
+        "random_forest_train_f1",
+        "random_forest_test_f1",
+        "hist_gradient_boosting_train_f1",
+        "hist_gradient_boosting_test_f1",
+    ):
+        assert key in result
+    for model in ("logreg", "random_forest", "hist_gradient_boosting"):
+        assert result[f"{model}_train_f1"] >= result[f"{model}_test_f1"]
+    # well-separated blobs: every model should also score a high F1 on test
+    assert result["logreg_test_f1"] > 0.85
+    assert result["random_forest_test_f1"] > 0.85
+    # legacy accuracy keys keep working alongside the new metric
+    assert "test_acc" in result
+
+
+def test_run_reports_roc_auc_for_all_models():
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    result = run(metric="roc_auc")
+    assert result["metric"] == "roc_auc"
+    for model in ("logreg", "random_forest", "hist_gradient_boosting"):
+        train_key = f"{model}_train_roc_auc"
+        test_key = f"{model}_test_roc_auc"
+        assert train_key in result and test_key in result
+        # well-separated blobs: every model should rank positives above
+        # negatives strongly on the test split
+        assert result[test_key] > 0.95
+    # accuracy keys are still present — roc_auc does not replace them
+    assert "test_acc" in result
+
+
+def test_run_rejects_unknown_metric():
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown metric"):
+        run(metric="precision")
+
+
+def test_run_default_metric_is_accuracy():
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    result = run()
+    assert result["metric"] == "accuracy"
 
 
 def test_run_includes_test_confusion_matrix():

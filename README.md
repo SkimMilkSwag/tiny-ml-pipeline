@@ -21,11 +21,23 @@ python -m pipeline.train
 
 # train on your own data instead of the synthetic blobs:
 python -m pipeline.train --data path/to/data.csv
+
+# report F1 or ROC-AUC for every model instead of accuracy:
+python -m pipeline.train --metric f1      # hard-prediction metric
+python -m pipeline.train --metric roc_auc # threshold-free ranking score
 ```
 
 `--data` expects a CSV with numeric feature columns plus a `label` column of
 `0`/`1` values. The feature names flow through into the importance report, so
 you get a ranked list for your own dataset.
+
+`--metric` (default `accuracy`) switches the per-model evaluation to `f1` or
+`roc_auc`. Accuracy and F1 score hard 0/1 predictions; ROC-AUC scores the model's
+continuous output (probability of the positive class), so it does not depend on
+the 0.5 decision threshold. Each non-default metric adds a
+`<model>_train_<metric>` / `<model>_test_<metric>` pair to the JSON report while
+the legacy `*_acc` keys stay, and the chosen metric is echoed as `"metric"` in
+the output.
 
 ## Structure
 
