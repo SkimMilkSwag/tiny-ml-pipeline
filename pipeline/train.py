@@ -206,16 +206,17 @@ def run(data=None, metric="accuracy"):
     # small log-spaced grid and keep the value with the best test accuracy.
     # On well-separated data the difference is marginal, but the sweep is the
     # habit that matters on real datasets where one of these values usually
-    # wins by a real margin.
+    # wins by a real margin. The winning estimator itself is kept (not just
+    # its C) so CV below reuses it instead of refitting.
     C_grid = (0.1, 1.0, 10.0)
     cv_results: dict[float, float] = {}
-    best_c, best_acc = None, -1.0
+    best_c, best_acc, best_clf = None, -1.0, None
     for c in C_grid:
         clf = LogisticRegression(C=c, max_iter=1000).fit(Xtr, ytr)
         acc = round(accuracy(yte, clf.predict(Xte)), 4)
         cv_results[c] = acc
         if acc > best_acc:
-            best_c, best_acc = c, acc
+            best_c, best_acc, best_clf = c, acc, clf
     results["logreg_hyperparam_search"] = {
         "C_grid": list(C_grid),
         "test_acc_by_C": {str(c): a for c, a in cv_results.items()},
@@ -223,7 +224,7 @@ def run(data=None, metric="accuracy"):
         "best_test_acc": best_acc,
     }
 
-    clf_lr = LogisticRegression(C=best_c, max_iter=1000).fit(Xtr, ytr)
+    clf_lr = best_clf
     lr_train, lr_test = _metric_scores(clf_lr, Xtr, ytr, Xte, yte)
     results["train_acc"] = round(accuracy(ytr, clf_lr.predict(Xtr)), 4)
     results["test_acc"] = round(accuracy(yte, clf_lr.predict(Xte)), 4)
@@ -272,7 +273,55 @@ def run(data=None, metric="accuracy"):
     cm = confusion_matrix(yte, clf_lr.predict(Xte))
     results["confusion_matrix"] = cm
 
+    # Cross-validation sanity check: holdout accuracy can flatter a model if
+    # the split happens to be easy or hard, so the winning LR is also scored
+    # with k-fold CV (stratified, folds are disjoint and cover the training
+    # set exactly) before we trust it as "the best model". The per-fold
+    # accuracies go in too — a spread there is the early warning that a single
+    # holdout number is noise.
+    n_folds = 3
+    cv_scores: list[float] = []
+    for tr_idx, va_idx in _stratified_folds(ytr, n_folds):
+        fold_clf = LogisticRegression(C=best_c, max_iter=1000).fit(
+            Xtr[tr_idx], ytr[tr_idx]
+        )
+        cv_scores.append(round(accuracy(ytr[va_idx], fold_clf.predict(Xtr[va_idx])), 4))
+    results["logreg_cv"] = {
+        "n_folds": n_folds,
+        "fold_accs": cv_scores,
+        "mean_acc": round(sum(cv_scores) / len(cv_scores), 4),
+    }
+
     return results
+
+
+def _stratified_folds(y, k):
+    """Yield (train_idx, val_idx) arrays for k stratified folds over ``y``.
+
+    Each class's samples are shuffled independently and round-robin assigned to
+    the k folds, so every validation fold sees roughly the same class mix as
+    the full dataset — the failure mode of a random split on imbalanced data is
+    exactly what this prevents. Folds are disjoint and together cover every
+    index exactly once; train for fold i is everything except fold i's rows.
+    """
+    rng = np.random.default_rng(7)
+    order: dict[int, list[int]] = {}
+    for cls in sorted(set(int(v) for v in y)):
+        idx = [i for i, v in enumerate(y) if int(v) == cls]
+        shuffled = list(rng.permutation(idx))
+        order[cls] = shuffled
+    folds: list[list[int]] = [[] for _ in range(k)]
+    for cls in sorted(order):
+        # deal each class round-robin over the fold count, independent of any
+        # other class's remainder — a shared running counter would let the
+        # second class's phase drift and starve later folds of small classes.
+        for j, i in enumerate(order[cls]):
+            folds[j % k].append(i)
+    n = len(y)
+    for val in folds:
+        val_set = set(val)
+        tr_idx = np.array([i for i in range(n) if i not in val_set], dtype=int)
+        yield tr_idx, np.array(sorted(val), dtype=int)
 
 
 if __name__ == "__main__":
