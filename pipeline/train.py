@@ -292,6 +292,20 @@ def run(data=None, metric="accuracy"):
         "mean_acc": round(sum(cv_scores) / len(cv_scores), 4),
     }
 
+    # Persist the winner to a default artifact so a script can predict against
+    # it without retraining; the path lands in results for consumers who want
+    # the exact location (``--predict`` in __main__ loads it).
+    import pickle
+
+    default_model_path = "best_model.pkl"
+    with open(default_model_path, "wb") as fh:
+        pickle.dump(clf_lr, fh)
+    results["saved_model"] = {
+        "path": default_model_path,
+        "model": type(clf_lr).__name__,
+        "C": best_c,
+    }
+
     return results
 
 
@@ -324,6 +338,51 @@ def _stratified_folds(y, k):
         yield tr_idx, np.array(sorted(val), dtype=int)
 
 
+def save_best_model(path):
+    """Pickle the grid-search-winning LogisticRegression to ``path``.
+
+    Runs the same protocol as ``run()`` — synthetic data and a C grid-search
+    scored by holdout accuracy — and persists only the winning estimator.
+    Returns a manifest dict ``{"model": ..., "C": ...}`` describing what was
+    written, so a caller can log it; ``load_best_model`` restores the pickle
+    for out-of-band predictions.
+    """
+    import pickle
+
+    from sklearn.linear_model import LogisticRegression
+
+    X, y = make_synthetic()
+    Xtr, Xte, ytr, yte = split(X, y)
+
+    C_grid = (0.1, 1.0, 10.0)
+    best_c, best_acc, best_clf = None, -1.0, None
+    for c in C_grid:
+        clf = LogisticRegression(C=c, max_iter=1000).fit(Xtr, ytr)
+        acc = round(accuracy(yte, clf.predict(Xte)), 4)
+        if acc > best_acc:
+            best_c, best_acc, best_clf = c, acc, clf
+    with open(path, "wb") as fh:
+        pickle.dump(best_clf, fh)
+    return {"model": type(best_clf).__name__, "C": best_c}
+
+
+def load_best_model(path):
+    """Load a model written by :func:`save_best_model` for prediction.
+
+    Raises FileNotFoundError (from open) if ``path`` does not exist and
+    ValueError if the payload is not an estimator, so a typo'd path or a
+    corrupted file both fail loudly instead of producing silent garbage
+    predictions.
+    """
+    import pickle
+
+    with open(path, "rb") as fh:
+        clf = pickle.load(fh)
+    if not hasattr(clf, "predict"):
+        raise ValueError(f"{path} does not contain a fitted estimator")
+    return clf
+
+
 if __name__ == "__main__":
     import argparse
     import json
@@ -343,7 +402,41 @@ if __name__ == "__main__":
         help="evaluation metric reported for every model (default: accuracy); "
         "f1 scores hard predictions, roc_auc scores continuous model output",
     )
+    parser.add_argument(
+        "--predict",
+        metavar="PATH",
+        default=None,
+        help="prediction mode: load a model saved by run() or save_best_model "
+        "and print its accuracy on the holdout test split instead of "
+        "retraining (uses the same data source as training)",
+    )
     args = parser.parse_args()
+
+    if args.predict:
+        from pipeline.features import standardize
+
+        if args.data:
+            from pipeline.load import load_csv
+
+            X, y, _ = load_csv(args.data)
+        else:
+            X, y = make_synthetic()
+        Xtr, Xte, _, yte = split(X, y)
+        _, mean, std = standardize(Xtr)
+        Xte = (Xte - mean) / std
+        clf = load_best_model(args.predict)
+        preds = clf.predict(Xte)
+        print(
+            json.dumps(
+                {
+                    "model_path": args.predict,
+                    "test_acc": round(accuracy(yte, preds), 4),
+                },
+                indent=2,
+            )
+        )
+        sys.exit(0)
+
     results = run(data=args.data, metric=args.metric)
     print(print_confusion_matrix(results["confusion_matrix"]), file=sys.stderr)
     print(json.dumps(results, indent=2))

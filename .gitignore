@@ -14,3 +14,4 @@ htmlcov/
 .ipynb_checkpoints/
 *.ipynb
 .DS_Store
+best_model.pkl

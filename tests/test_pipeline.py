@@ -453,3 +453,64 @@ def test_run_includes_test_confusion_matrix():
     X, y = make_synthetic()
     _, Xte, _, yte = split(X, y)
     assert n_test == len(yte)
+
+
+def test_save_load_best_model_round_trip(tmp_path):
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    from pipeline.train import load_best_model, save_best_model
+
+    p = tmp_path / "best_model.pkl"
+    manifest = save_best_model(str(p))
+    assert manifest["model"] == "LogisticRegression"
+    assert manifest["C"] in (0.1, 1.0, 10.0)
+    assert p.exists()
+
+    clf = load_best_model(str(p))
+    # the reloaded model must actually predict on the same (raw) scale it was
+    # trained on and beat chance strongly — a round-trip that returns a working
+    # estimator, not just an openable file.
+    X, y = make_synthetic()
+    _, Xte, _, yte = split(X, y)
+    preds = clf.predict(Xte)
+    assert set(preds.tolist()) <= {0, 1}
+    assert accuracy(yte, preds) > 0.85
+
+
+def test_run_persists_winner_and_reports_path(tmp_path, monkeypatch):
+    # run() should write the grid-search winner to the default artifact and
+    # report its location, so a --predict consumer knows where to load from.
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    monkeypatch.chdir(tmp_path)
+    from pipeline.train import run
+
+    result = run()
+    saved = result["saved_model"]
+    assert saved["model"] == "LogisticRegression"
+    assert (tmp_path / saved["path"]).exists()
+
+
+def test_load_best_model_rejects_non_estimator(tmp_path):
+    import pickle
+
+    import pytest
+
+    p = tmp_path / "not_a_model.pkl"
+    with p.open("wb") as fh:
+        pickle.dump({"weights": [1, 2, 3]}, fh)
+    from pipeline.train import load_best_model
+
+    with pytest.raises(ValueError, match="does not contain a fitted estimator"):
+        load_best_model(str(p))
+
+
+def test_load_best_model_missing_file(tmp_path):
+    import pytest
+
+    from pipeline.train import load_best_model
+
+    with pytest.raises(FileNotFoundError):
+        load_best_model(str(tmp_path / "nope.pkl"))
