@@ -514,3 +514,90 @@ def test_load_best_model_missing_file(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         load_best_model(str(tmp_path / "nope.pkl"))
+
+
+# --- --predict mode: full CLI round trip -------------------------------------
+
+def test_cli_predict_mode_round_trip(tmp_path):
+    """Save with run(), then predict against the saved artifact via __main__.
+
+    Exercises the real CLI path end to end: train once (run() persists the
+    grid-search winner to best_model.pkl), then re-enter through
+    ``python -m pipeline.train --predict best_model.pkl`` and check the
+    printed JSON matches what a direct load+predict would produce.
+    """
+    import json
+    import pytest
+
+    from pipeline.train import accuracy, load_best_model, run, split
+
+    if not _sklearn_available():
+        pytest.skip("scikit-learn not installed")
+
+    import subprocess
+    import sys as _sys
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # PYTHONPATH: repo root (for `pipeline`) + the prebuilt numpy/scipy/sklearn
+    # overlay first, so the child sees a working stack even when the system
+    # site-packages carry an incompatible numpy ABI.
+    child_env = {**os.environ}
+    existing_pp = child_env.get("PYTHONPATH", "")
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        [p for p in ("/tmp/mlopen", root, existing_pp) if p]
+    )
+    save = subprocess.run(
+        [_sys.executable, "-c", "from pipeline.train import run; run()"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=child_env,
+    )
+    # run() prints the report on stdout; it also writes best_model.pkl CWD-relative
+    assert save.returncode == 0, save.stderr
+    model_path = tmp_path / "best_model.pkl"
+    assert model_path.exists(), "run() did not persist best_model.pkl in the working dir"
+
+    pred = subprocess.run(
+        [_sys.executable, "-m", "pipeline.train", "--predict", str(model_path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=child_env,
+    )
+    assert pred.returncode == 0, pred.stderr
+    report = json.loads(pred.stdout)
+    # the CLI reports the same number a direct load+predict would compute:
+    # same synthetic data, same split protocol, standardize on train, predict on test
+    X, y = make_synthetic()
+    Xtr, Xte, ytr, yte = split(X, y)
+    from pipeline.features import standardize
+
+    _, mean, std = standardize(Xtr)
+    Xte_std = (Xte - mean) / std
+    clf = load_best_model(str(model_path))
+    direct = round(accuracy(yte, clf.predict(Xte_std)), 4)
+    assert report["test_acc"] == direct
+    assert report["model_path"] == str(model_path)
+
+
+def test_cli_predict_mode_missing_file_fails_loudly(tmp_path):
+    """--predict on a path that doesn't exist exits non-zero with the OS error."""
+    import subprocess
+    import sys as _sys
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    child_env = {**os.environ}
+    existing_pp = child_env.get("PYTHONPATH", "")
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        [p for p in ("/tmp/mlopen", root, existing_pp) if p]
+    )
+    pred = subprocess.run(
+        [_sys.executable, "-m", "pipeline.train", "--predict", str(tmp_path / "nope.pkl")],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=child_env,
+    )
+    assert pred.returncode != 0
+    assert "nope.pkl" in pred.stderr

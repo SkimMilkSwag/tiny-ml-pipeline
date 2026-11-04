@@ -25,6 +25,10 @@ python -m pipeline.train --data path/to/data.csv
 # report F1 or ROC-AUC for every model instead of accuracy:
 python -m pipeline.train --metric f1      # hard-prediction metric
 python -m pipeline.train --metric roc_auc # threshold-free ranking score
+
+# run() persists the grid-search winner to best_model.pkl; predict against it
+# without retraining (same data source, same split protocol):
+python -m pipeline.train --predict best_model.pkl
 ```
 
 `--data` expects a CSV with numeric feature columns plus a `label` column of
