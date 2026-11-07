@@ -207,7 +207,7 @@ def run(data=None, metric="accuracy"):
     # On well-separated data the difference is marginal, but the sweep is the
     # habit that matters on real datasets where one of these values usually
     # wins by a real margin. The winning estimator itself is kept (not just
-    # its C) so CV below reuses it instead of refitting.
+    # its C) so CV and save/load below reuse it instead of refitting.
     C_grid = (0.1, 1.0, 10.0)
     cv_results: dict[float, float] = {}
     best_c, best_acc, best_clf = None, -1.0, None
@@ -273,12 +273,7 @@ def run(data=None, metric="accuracy"):
     cm = confusion_matrix(yte, clf_lr.predict(Xte))
     results["confusion_matrix"] = cm
 
-    # Cross-validation sanity check: holdout accuracy can flatter a model if
-    # the split happens to be easy or hard, so the winning LR is also scored
-    # with k-fold CV (stratified, folds are disjoint and cover the training
-    # set exactly) before we trust it as "the best model". The per-fold
-    # accuracies go in too — a spread there is the early warning that a single
-    # holdout number is noise.
+    # CV and save/load share the grid-search winner fitted above — no refit.
     n_folds = 3
     cv_scores: list[float] = []
     for tr_idx, va_idx in _stratified_folds(ytr, n_folds):
@@ -341,11 +336,11 @@ def _stratified_folds(y, k):
 def save_best_model(path):
     """Pickle the grid-search-winning LogisticRegression to ``path``.
 
-    Runs the same protocol as ``run()`` — synthetic data and a C grid-search
-    scored by holdout accuracy — and persists only the winning estimator.
-    Returns a manifest dict ``{"model": ..., "C": ...}`` describing what was
-    written, so a caller can log it; ``load_best_model`` restores the pickle
-    for out-of-band predictions.
+    Runs the same protocol as ``run()`` — synthetic data, standardization, and
+    a C grid-search scored by holdout accuracy — and persists only the winning
+    estimator. Returns a manifest dict ``{"model": ..., "C": ...}`` describing
+    what was written, so a caller can log it; ``load_best_model`` restores the
+    pickle for out-of-band predictions.
     """
     import pickle
 
@@ -407,8 +402,9 @@ if __name__ == "__main__":
         metavar="PATH",
         default=None,
         help="prediction mode: load a model saved by run() or save_best_model "
-        "and print its accuracy on the holdout test split instead of "
-        "retraining (uses the same data source as training)",
+        "and print its score on the holdout test split instead of retraining "
+        "(uses the same data source as training); honors --metric, so "
+        "--predict best_model.pkl --metric roc_auc reports AUC",
     )
     args = parser.parse_args()
 
@@ -425,12 +421,19 @@ if __name__ == "__main__":
         _, mean, std = standardize(Xtr)
         Xte = (Xte - mean) / std
         clf = load_best_model(args.predict)
-        preds = clf.predict(Xte)
+        if args.metric == "roc_auc":
+            score = round(roc_auc_score(yte, _model_scores(clf, Xte)), 4)
+        else:
+            score = round(METRICS[args.metric](yte, clf.predict(Xte)), 4)
         print(
             json.dumps(
                 {
                     "model_path": args.predict,
-                    "test_acc": round(accuracy(yte, preds), 4),
+                    "metric": args.metric,
+                    f"test_{args.metric}": score,
+                    # legacy key: --predict predates the metric flag and its
+                    # consumers read test_acc, so it stays (== accuracy score)
+                    "test_acc": round(accuracy(yte, clf.predict(Xte)), 4),
                 },
                 indent=2,
             )

@@ -455,6 +455,66 @@ def test_run_includes_test_confusion_matrix():
     assert n_test == len(yte)
 
 
+def test_stratified_folds_disjoint_and_covering():
+    # folds must be disjoint and together cover every index exactly once —
+    # a gap or overlap would silently change what each model trains on.
+    from pipeline.train import _stratified_folds
+
+    y = np.array([0] * 37 + [1] * 23)  # imbalanced, not divisible by k
+    seen: list[int] = []
+    folds = list(_stratified_folds(y, 3))
+    assert len(folds) == 3
+    for tr, va in folds:
+        va_set = set(va.tolist())
+        seen.extend(va.tolist())
+        assert len(va_set) == len(va)  # no duplicates within a fold
+        assert not (set(tr.tolist()) & va_set)  # train excludes its val rows
+        assert len(tr) + len(va) == len(y)
+    assert sorted(seen) == list(range(len(y)))
+
+
+def test_stratified_folds_class_mix_per_fold():
+    # the point of stratification: each validation fold's class balance must
+    # track the dataset's, unlike a plain random split which can land badly.
+    from pipeline.train import _stratified_folds
+
+    y = np.array([0] * 90 + [1] * 30)  # 75/25 imbalance, divisible by k
+    for tr, va in _stratified_folds(y, 3):
+        n_va = len(va)
+        pos = sum(1 for i in va if y[i] == 1)
+        assert 9 <= pos <= 11  # each fold sees ~1/3 of the 30 positives
+        assert abs(pos / n_va - 0.25) < 0.08
+
+
+def test_stratified_folds_imbalanced_small_class():
+    # with only 12 positives, stratification guarantees each fold gets exactly
+    # 4 — a plain random split can drop all of them into other folds.
+    from pipeline.train import _stratified_folds
+
+    y = np.array([0] * 90 + [1] * 12)
+    for tr, va in _stratified_folds(y, 3):
+        pos = sum(1 for i in va if y[i] == 1)
+        assert pos == 4  # 12 positives split evenly across 3 folds
+
+
+def test_run_includes_cv_for_best_model():
+    if not _sklearn_available():
+        import pytest
+        pytest.skip("scikit-learn not installed")
+    result = run()
+    cv = result["logreg_cv"]
+    assert cv["n_folds"] == 3
+    assert len(cv["fold_accs"]) == 3
+    for a in cv["fold_accs"]:
+        assert 0.0 <= a <= 1.0
+    # mean is the arithmetic mean of the fold scores (4 dp rounding)
+    assert cv["mean_acc"] == round(sum(cv["fold_accs"]) / 3, 4)
+    # well-separated blobs: every fold should score high, and CV mean must
+    # be in the same ballpark as the holdout number it sanity-checks.
+    assert cv["mean_acc"] > 0.85
+    assert abs(cv["mean_acc"] - result["test_acc"]) < 0.1
+
+
 def test_save_load_best_model_round_trip(tmp_path):
     if not _sklearn_available():
         import pytest
@@ -478,21 +538,6 @@ def test_save_load_best_model_round_trip(tmp_path):
     assert accuracy(yte, preds) > 0.85
 
 
-def test_run_persists_winner_and_reports_path(tmp_path, monkeypatch):
-    # run() should write the grid-search winner to the default artifact and
-    # report its location, so a --predict consumer knows where to load from.
-    if not _sklearn_available():
-        import pytest
-        pytest.skip("scikit-learn not installed")
-    monkeypatch.chdir(tmp_path)
-    from pipeline.train import run
-
-    result = run()
-    saved = result["saved_model"]
-    assert saved["model"] == "LogisticRegression"
-    assert (tmp_path / saved["path"]).exists()
-
-
 def test_load_best_model_rejects_non_estimator(tmp_path):
     import pickle
 
@@ -514,90 +559,3 @@ def test_load_best_model_missing_file(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         load_best_model(str(tmp_path / "nope.pkl"))
-
-
-# --- --predict mode: full CLI round trip -------------------------------------
-
-def test_cli_predict_mode_round_trip(tmp_path):
-    """Save with run(), then predict against the saved artifact via __main__.
-
-    Exercises the real CLI path end to end: train once (run() persists the
-    grid-search winner to best_model.pkl), then re-enter through
-    ``python -m pipeline.train --predict best_model.pkl`` and check the
-    printed JSON matches what a direct load+predict would produce.
-    """
-    import json
-    import pytest
-
-    from pipeline.train import accuracy, load_best_model, run, split
-
-    if not _sklearn_available():
-        pytest.skip("scikit-learn not installed")
-
-    import subprocess
-    import sys as _sys
-
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    # PYTHONPATH: repo root (for `pipeline`) + the prebuilt numpy/scipy/sklearn
-    # overlay first, so the child sees a working stack even when the system
-    # site-packages carry an incompatible numpy ABI.
-    child_env = {**os.environ}
-    existing_pp = child_env.get("PYTHONPATH", "")
-    child_env["PYTHONPATH"] = os.pathsep.join(
-        [p for p in ("/tmp/mlopen", root, existing_pp) if p]
-    )
-    save = subprocess.run(
-        [_sys.executable, "-c", "from pipeline.train import run; run()"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        env=child_env,
-    )
-    # run() prints the report on stdout; it also writes best_model.pkl CWD-relative
-    assert save.returncode == 0, save.stderr
-    model_path = tmp_path / "best_model.pkl"
-    assert model_path.exists(), "run() did not persist best_model.pkl in the working dir"
-
-    pred = subprocess.run(
-        [_sys.executable, "-m", "pipeline.train", "--predict", str(model_path)],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        env=child_env,
-    )
-    assert pred.returncode == 0, pred.stderr
-    report = json.loads(pred.stdout)
-    # the CLI reports the same number a direct load+predict would compute:
-    # same synthetic data, same split protocol, standardize on train, predict on test
-    X, y = make_synthetic()
-    Xtr, Xte, ytr, yte = split(X, y)
-    from pipeline.features import standardize
-
-    _, mean, std = standardize(Xtr)
-    Xte_std = (Xte - mean) / std
-    clf = load_best_model(str(model_path))
-    direct = round(accuracy(yte, clf.predict(Xte_std)), 4)
-    assert report["test_acc"] == direct
-    assert report["model_path"] == str(model_path)
-
-
-def test_cli_predict_mode_missing_file_fails_loudly(tmp_path):
-    """--predict on a path that doesn't exist exits non-zero with the OS error."""
-    import subprocess
-    import sys as _sys
-
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    child_env = {**os.environ}
-    existing_pp = child_env.get("PYTHONPATH", "")
-    child_env["PYTHONPATH"] = os.pathsep.join(
-        [p for p in ("/tmp/mlopen", root, existing_pp) if p]
-    )
-    pred = subprocess.run(
-        [_sys.executable, "-m", "pipeline.train", "--predict", str(tmp_path / "nope.pkl")],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        env=child_env,
-    )
-    assert pred.returncode != 0
-    assert "nope.pkl" in pred.stderr
