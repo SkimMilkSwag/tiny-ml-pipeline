@@ -559,3 +559,94 @@ def test_load_best_model_missing_file(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         load_best_model(str(tmp_path / "nope.pkl"))
+
+
+# --- --predict honors --metric -------------------------------------------------
+
+
+def _run_cli(args, cwd, extra_env=None):
+    """Run the CLI in a subprocess with the mlopen overlay on PYTHONPATH."""
+    import subprocess
+    import sys as _sys
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    child_env = {**os.environ}
+    existing_pp = child_env.get("PYTHONPATH", "")
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        [p for p in ("/tmp/mlopen", root, existing_pp) if p]
+    )
+    if extra_env:
+        child_env.update(extra_env)
+    return subprocess.run(
+        [_sys.executable, "-m", "pipeline.train", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=child_env,
+    )
+
+
+def test_cli_predict_reports_f1_when_metric_f1(tmp_path):
+    """--predict --metric f1 reports the F1 score, not accuracy."""
+    import json
+    import pytest
+
+    if not _sklearn_available():
+        pytest.skip("scikit-learn not installed")
+
+    save = _run_cli([], cwd=tmp_path)  # bare `python -m pipeline.train` runs training
+    assert save.returncode == 0, save.stderr
+    model_path = tmp_path / "best_model.pkl"
+    assert model_path.exists()
+
+    proc = _run_cli(["--predict", str(model_path), "--metric", "f1"], cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    report = json.loads(proc.stdout)
+    assert report["metric"] == "f1"
+    # the synthetic blobs are well separated: F1 should be high and must equal
+    # an independent recomputation on the same split/scale
+    from pipeline.features import standardize
+    from pipeline.train import f1_score, load_best_model
+
+    X, y = make_synthetic()
+    Xtr, Xte, ytr, yte = split(X, y)
+    _, mean, std = standardize(Xtr)
+    Xte_std = (Xte - mean) / std
+    clf = load_best_model(str(model_path))
+    expected = round(f1_score(yte, clf.predict(Xte_std)), 4)
+    assert report["test_f1"] == expected
+    assert report["test_f1"] > 0.85
+    # legacy accuracy key is still present and self-consistent
+    assert "test_acc" in report
+
+
+def test_cli_predict_reports_roc_auc_when_metric_roc_auc(tmp_path):
+    """--predict --metric roc_auc reports AUC from the model's probabilities."""
+    import json
+    import pytest
+
+    if not _sklearn_available():
+        pytest.skip("scikit-learn not installed")
+
+    save = _run_cli([], cwd=tmp_path)
+    assert save.returncode == 0, save.stderr
+    model_path = tmp_path / "best_model.pkl"
+    assert model_path.exists()
+
+    proc = _run_cli(["--predict", str(model_path), "--metric", "roc_auc"], cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    report = json.loads(proc.stdout)
+    assert report["metric"] == "roc_auc"
+
+    from pipeline.features import standardize
+    from pipeline.train import _model_scores, load_best_model, roc_auc_score
+
+    X, y = make_synthetic()
+    Xtr, Xte, ytr, yte = split(X, y)
+    _, mean, std = standardize(Xtr)
+    Xte_std = (Xte - mean) / std
+    clf = load_best_model(str(model_path))
+    expected = round(roc_auc_score(yte, _model_scores(clf, Xte_std)), 4)
+    assert report["test_roc_auc"] == expected
+    # well-separated blobs: AUC should be essentially perfect
+    assert report["test_roc_auc"] > 0.95
