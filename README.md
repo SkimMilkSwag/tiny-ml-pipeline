@@ -41,7 +41,11 @@ continuous output (probability of the positive class), so it does not depend on
 the 0.5 decision threshold. Each non-default metric adds a
 `<model>_train_<metric>` / `<model>_test_<metric>` pair to the JSON report while
 the legacy `*_acc` keys stay, and the chosen metric is echoed as `"metric"` in
-the output.
+the output. The flag applies to `--predict` mode too:
+
+```bash
+python -m pipeline.train --predict best_model.pkl --metric roc_auc
+```
 
 ## Structure
 
