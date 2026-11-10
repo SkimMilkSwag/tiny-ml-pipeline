@@ -140,13 +140,18 @@ def feature_importances(clf, feature_names=("x0", "x1")):
 def _model_scores(model, X):
     """Continuous scores a metric can rank against: probabilities if the model
     exposes them, else raw decision values. Used for ``roc_auc``, which needs an
-    ordered score rather than a hard 0/1 prediction."""
+    ordered score rather than a hard 0/1 prediction. Raises AttributeError if
+    the model has neither, so a mis-typed model fails loudly at scoring time."""
     if hasattr(model, "predict_proba"):
         return model.predict_proba(X)[:, 1]
+    if not hasattr(model, "decision_function"):
+        raise AttributeError(
+            f"{type(model).__name__} has neither predict_proba nor decision_function"
+        )
     return model.decision_function(X)
 
 
-def run(data=None, metric="accuracy"):
+def run(data=None, metric="accuracy", n_folds=3):
     """End-to-end: load data -> standardize -> train LR (grid-searched), RF, HGB.
 
     With ``data`` (a CSV path) the features and label come from that file;
@@ -162,6 +167,11 @@ def run(data=None, metric="accuracy"):
     threshold-free. Each model gets a ``<model>_train_<metric>`` /
     ``<model>_test_<metric>`` pair in the results; the legacy ``*_acc`` keys
     always stay (they are accuracy) so existing consumers keep working.
+
+    ``n_folds`` sets the number of stratified validation folds for the CV
+    score of the grid-search-winning model (default 3). Must be at least 2:
+    with one fold there is nothing to hold out, which would silently turn the
+    "validation" score into a training score.
     """
     from sklearn.linear_model import LogisticRegression
     from sklearn.ensemble import RandomForestClassifier
@@ -182,6 +192,10 @@ def run(data=None, metric="accuracy"):
         raise ValueError(
             f"unknown metric {metric!r}; expected one of {sorted(METRICS)}"
         )
+    if n_folds < 2:
+        # with a single fold the holdout IS the training set, so the "CV"
+        # score would silently measure memorization rather than generalization
+        raise ValueError("n_folds must be at least 2 (1 fold has no holdout)")
 
     results: dict[str, float] = {}
     results["metric"] = metric
@@ -274,7 +288,6 @@ def run(data=None, metric="accuracy"):
     results["confusion_matrix"] = cm
 
     # CV and save/load share the grid-search winner fitted above — no refit.
-    n_folds = 3
     cv_scores: list[float] = []
     for tr_idx, va_idx in _stratified_folds(ytr, n_folds):
         fold_clf = LogisticRegression(C=best_c, max_iter=1000).fit(
@@ -406,6 +419,13 @@ if __name__ == "__main__":
         "(uses the same data source as training); honors --metric, so "
         "--predict best_model.pkl --metric roc_auc reports AUC",
     )
+    parser.add_argument(
+        "--n-folds",
+        type=int,
+        default=3,
+        help="number of stratified validation folds for the CV score "
+        "(default: 3; must be at least 2)",
+    )
     args = parser.parse_args()
 
     if args.predict:
@@ -440,6 +460,6 @@ if __name__ == "__main__":
         )
         sys.exit(0)
 
-    results = run(data=args.data, metric=args.metric)
+    results = run(data=args.data, metric=args.metric, n_folds=args.n_folds)
     print(print_confusion_matrix(results["confusion_matrix"]), file=sys.stderr)
     print(json.dumps(results, indent=2))
